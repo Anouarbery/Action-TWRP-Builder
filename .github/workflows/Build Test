@@ -1,8 +1,9 @@
 name: Build TWRP for Samsung a56x
 
 on:
-  push:
-    jobs:
+  workflow_dispatch:
+    push:
+     jobs:
       - build
 
 jobs:
