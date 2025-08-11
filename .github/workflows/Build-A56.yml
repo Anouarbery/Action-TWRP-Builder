@@ -2,7 +2,6 @@ name: VENDOR_BOOT - TWRP
 
 on:
   workflow_dispatch:
-  workflow_dispatch:
     inputs:
       MANIFEST_URL:
         description: 'MANIFEST_URL (if want to use SSH keys, use git@github.com:XXXXX)'
