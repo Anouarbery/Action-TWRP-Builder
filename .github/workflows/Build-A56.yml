@@ -13,9 +13,7 @@ on:
         default: 'old'
         type: choice
         options:
-          - twrp-12.1
-          - twrp-14
-          - twrp-14.1
+          - old
       DEVICE_PATH:
         description: 'Device Path, eg. device/vendor/codename'
         required: true
