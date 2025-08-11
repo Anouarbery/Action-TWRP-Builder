@@ -2,18 +2,24 @@ name: VENDOR_BOOT - TWRP
 
 on:
   workflow_dispatch:
+  workflow_dispatch:
     inputs:
-      DEVICE_TREE:
-        description: 'Device Tree URL eg. https://github.com/<owner>/<repo>'
+      MANIFEST_URL:
+        description: 'MANIFEST_URL (if want to use SSH keys, use git@github.com:XXXXX)'
+        required: true
+        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
+      MANIFEST_BRANCH:
+        description: 'MANIFEST_BRANCH'
+        required: true
+        default: 'twrp-12.1'
+      DEVICE_TREE_URL:
+        description: 'DEVICE_TREE_URL'
         required: true
         default: 'https://github.com/Anouarbery/twrp_device_samsung_a56x.git'
-      DEVICE_BRANCH:
-        description: 'Device Tree Branch, eg. old'
+      DEVICE_TREE_BRANCH:
+        description: 'DEVICE_TREE_BRANCH'
         required: true
-        default: 'old'
-        type: choice
-        options:
-          - old
+        default: 'dev'
       DEVICE_PATH:
         description: 'Device Path, eg. device/vendor/codename'
         required: true
