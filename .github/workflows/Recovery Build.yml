@@ -14,11 +14,11 @@ on:
       DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
         required: true
-        default: 'https://github.com/ratatouille100/twrp_device_samsung_a56x'
+        default: 'https://github.com/Anouarbery/twrp_device_samsung_a56x.git'
       DEVICE_TREE_BRANCH:
         description: 'DEVICE_TREE_BRANCH'
         required: true
-        default: 'dev'
+        default: 'Old'
       DEVICE_PATH:
         description: 'DEVICE_PATH'
         required: true
