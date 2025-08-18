@@ -1,0 +1,61 @@
+name: Build Permissive Kernel for Galaxy A56 (SM-A566B)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Permissive Kernel
+    runs-on: ubuntu-22.04
+
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      DEFCONFIG: gki_defconfig      # Update this if needed
+      KERNEL_DIR: src/kernel-6.6
+      OUT_DIR: out
+      IMAGE_NAME: Image.gz-dtb        # Update if your output differs
+
+    steps:
+      - name: 📥 Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: Luciiuss/sm-a566b
+          path: src
+          fetch-depth: 1
+
+      - name: 📦 Install Build Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison flex libssl-dev libncurses-dev \
+            gcc g++ libelf-dev build-essential \
+            ccache wget
+
+      - name: 🔧 Download GCC Toolchain
+        run: |
+          mkdir -p toolchain
+          cd toolchain
+          wget https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/aarch64-linux-gnu/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu.tar.xz
+          tar -xf gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu.tar.xz
+          echo "TOOLCHAIN_PATH=$PWD/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu/bin" >> $GITHUB_ENV
+
+      - name: 🩹 Patch Kernel for Permissive SELinux
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          sed -i 's/selinux_enforcing = enforcing ? 1 : 0;/selinux_enforcing = 0;/' security/selinux/hooks.c
+          sed -i 's/if (new_value != selinux_enforcing)/if (0)/' security/selinux/selinuxfs.c || true
+
+      - name: 🛠️ Build Kernel
+        run: |
+          export PATH=$TOOLCHAIN_PATH:$PATH
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          cd ${{ env.KERNEL_DIR }}
+          make O=../../${{ env.OUT_DIR }} ${{ env.DEFCONFIG }}
+          make -j$(nproc) O=../../${{ env.OUT_DIR }}
+
+      - name: 📤 Upload Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: permissive-kernel
+          path: ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.IMAGE_NAME }} }}
