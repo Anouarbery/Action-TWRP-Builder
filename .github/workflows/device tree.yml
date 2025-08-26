@@ -1,156 +1,38 @@
-#!/bin/bash
-# Script tout-en-un : Générer device tree Galaxy A56x et repo Git prêt à push
-set -e
+name: Generate Device Tree A56x
 
-# -------------------------
-# Variables
-# -------------------------
-FIRMWARE_REPO="https://gitgud.io/Van-Firmware-Dumps/samsung/a56x.git"
-MAGISKBOOT_REPO="https://github.com/Luciiuss/sm-a566b.git"
-WORKDIR="$HOME/a56x_firmware"
-DEVICEDIR="$WORKDIR/device/samsung/a56x"
-VENDORDIR="$WORKDIR/vendor/samsung/a56x"
-TMPDIR="$WORKDIR/tmp_extraction"
-MAGISKBOOT_DIR="$WORKDIR/magiskboot"
-GIT_REPO_DIR="$HOME/a56x_device_tree"
-BRANCH="device_tree_a56x"
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-# -------------------------
-# Dépendances
-# -------------------------
-# sudo apt install git build-essential device-tree-compiler simg2img cpio
+jobs:
+  build-device-tree:
+    runs-on: ubuntu-latest
+    env:
+      WORKDIR: ${{ github.workspace }}/a56x_firmware
+      GIT_REPO_DIR: ${{ github.workspace }}/a56x_device_tree
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-# -------------------------
-# Clonage firmware
-# -------------------------
-echo "[*] Clonage du repo firmware..."
-git clone "$FIRMWARE_REPO" "$WORKDIR"
-cd "$WORKDIR"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential device-tree-compiler simg2img cpio
 
-# -------------------------
-# Clonage et compilation magiskboot
-# -------------------------
-echo "[*] Clonage du repo magiskboot..."
-git clone "$MAGISKBOOT_REPO" "$MAGISKBOOT_DIR"
-cd "$MAGISKBOOT_DIR"
-echo "[*] Compilation de magiskboot..."
-make
-cd "$WORKDIR"
+      - name: Run device tree generation script
+        run: |
+          mkdir -p scripts
+          curl -o scripts/workflow_generate_device_tree.sh https://raw.githubusercontent.com/<YOUR_USER>/<YOUR_REPO>/main/scripts/workflow_generate_device_tree.sh
+          chmod +x scripts/workflow_generate_device_tree.sh
+          bash scripts/workflow_generate_device_tree.sh
 
-# -------------------------
-# Création répertoires
-# -------------------------
-mkdir -p "$DEVICEDIR" "$VENDORDIR" "$TMPDIR"
-
-# -------------------------
-# Extraction boot/vendor_boot
-# -------------------------
-for IMG in $(find . -type f -name "boot.img" -o -name "vendor_boot.img"); do
-    echo "[*] Extraction $IMG..."
-    IMG_BASENAME=$(basename "$IMG")
-    mkdir -p "$TMPDIR/boot"
-    cp "$IMG" "$TMPDIR/boot/"
-    cd "$TMPDIR/boot"
-
-    "$MAGISKBOOT_DIR/magiskboot" unpack "$IMG_BASENAME"
-
-    # Décompresser ramdisk
-    if [ -f "ramdisk.cpio" ]; then
-        mkdir -p ramdisk
-        cd ramdisk
-        cpio -idm < ../ramdisk.cpio
-        cp -v init*.rc fstab.* "$DEVICEDIR/" 2>/dev/null || true
-        cd ..
-    fi
-
-    # DTB -> DTS
-    if [ -f "split_img/boot.img-dtb" ]; then
-        dtc -I dtb -O dts -o "$DEVICEDIR/kernel_extracted.dts" split_img/boot.img-dtb
-    fi
-    cd "$WORKDIR"
-done
-
-# -------------------------
-# Extraction system/vendor.img
-# -------------------------
-for SYSIMG in $(find . -type f -name "system.img" -o -name "vendor.img"); do
-    echo "[*] Extraction $SYSIMG..."
-    mkdir -p "$TMPDIR/sys"
-    cp "$SYSIMG" "$TMPDIR/sys/raw.img"
-
-    simg2img "$TMPDIR/sys/raw.img" "$TMPDIR/sys/system.raw.img"
-    mkdir -p "$TMPDIR/sys/mnt"
-    sudo mount -o loop "$TMPDIR/sys/system.raw.img" "$TMPDIR/sys/mnt"
-
-    cp -r "$TMPDIR/sys/mnt"/* "$VENDORDIR/"
-    sudo umount "$TMPDIR/sys/mnt"
-done
-
-# -------------------------
-# Création device tree
-# -------------------------
-echo "[*] Création des fichiers device tree..."
-cat > "$DEVICEDIR/BoardConfig.mk" << EOF
-BOARD_KERNEL_CMDLINE := androidboot.hardware=samsung
-BOARD_KERNEL_BASE := 0x10008000
-BOARD_KERNEL_PAGESIZE := 2048
-BOARD_KERNEL_TAGS_ADDR := 0x10000100
-BOARD_KERNEL_TAGS_SIZE := 0x200
-BOARD_RAMDISK_OFFSET := 0x01000000
-EOF
-
-cat > "$DEVICEDIR/AndroidProducts.mk" << EOF
-include \$(CLEAR_VARS)
-LOCAL_MODULE := android-info
-LOCAL_SRC_FILES := android-info.txt
-LOCAL_MODULE_PATH := \$(TARGET_OUT)/system/etc
-include \$(BUILD_PREBUILT)
-EOF
-
-cat > "$DEVICEDIR/device.mk" << EOF
-include \$(CLEAR_VARS)
-LOCAL_MODULE := libstagefright
-LOCAL_SRC_FILES := \$(call all-subdir-java-files)
-LOCAL_MODULE_TAGS := optional
-include \$(BUILD_MULTI_PREBUILT)
-EOF
-
-cat > "$DEVICEDIR/fstab.a56x" << EOF
-/dev/block/bootdevice/by-name/system      /system      ext4    ro      wait
-/dev/block/bootdevice/by-name/vendor      /vendor      ext4    ro      wait
-/dev/block/bootdevice/by-name/cache       /cache       ext4    rw      wait
-EOF
-
-# -------------------------
-# proprietary-files.txt
-# -------------------------
-cd "$VENDORDIR"
-find . -type f | sed "s|^\./||" > proprietary-files.txt
-
-# -------------------------
-# Création repo Git prêt à push
-# -------------------------
-echo "[*] Création repo Git à $GIT_REPO_DIR..."
-mkdir -p "$GIT_REPO_DIR"
-cd "$GIT_REPO_DIR"
-git init
-git checkout -b $BRANCH
-
-# Copier device tree et blobs
-mkdir -p device/samsung/a56x vendor/samsung/a56x
-cp -r $DEVICEDIR/* device/samsung/a56x/
-cp -r $VENDORDIR/* vendor/samsung/a56x/
-
-# Commit initial
-git add .
-git commit -m "Device tree Galaxy A56x complet + blobs propriétaires"
-
-echo "[*] Repo Git créé avec branche $BRANCH"
-echo "[*] Vous pouvez maintenant ajouter l’origin et push :"
-echo "   git remote add origin <VOTRE_REPO_URL>"
-echo "   git push -u origin $BRANCH"
-
-# Nettoyage
-rm -rf "$TMPDIR"
-
-echo "[*] Terminé. Device tree et repo Git prêts à push."
+      - name: Commit generated device tree
+        run: |
+          cd $GIT_REPO_DIR
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Update device tree A56x from firmware" || echo "No changes to commit"
+          git push origin device_tree_a56x || echo "Could not push (maybe first time)"
