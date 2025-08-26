@@ -1,31 +1,34 @@
 #!/bin/bash
-# Workflow avancé pour générer un device tree Galaxy A56x avec magiskboot intégré
-
+# Script tout-en-un : Générer device tree Galaxy A56x et repo Git prêt à push
 set -e
 
 # -------------------------
 # Variables
 # -------------------------
-REPO_URL="https://gitgud.io/Van-Firmware-Dumps/samsung/a56x.git"
-MAGISKBOOT_REPO="https://github.com/Luciiuss/sm-a566b/tree/main/magiskboot"
+FIRMWARE_REPO="https://gitgud.io/Van-Firmware-Dumps/samsung/a56x.git"
+MAGISKBOOT_REPO="https://github.com/Luciiuss/sm-a566b.git"
 WORKDIR="$HOME/a56x_firmware"
 DEVICEDIR="$WORKDIR/device/samsung/a56x"
 VENDORDIR="$WORKDIR/vendor/samsung/a56x"
 TMPDIR="$WORKDIR/tmp_extraction"
 MAGISKBOOT_DIR="$WORKDIR/magiskboot"
-
-# Dépendances (installer si nécessaire)
-# sudo apt install android-tools-adb android-tools-fastboot device-tree-compiler simg2img cpio
+GIT_REPO_DIR="$HOME/a56x_device_tree"
+BRANCH="device_tree_a56x"
 
 # -------------------------
-# Clonage du repo principal
+# Dépendances
 # -------------------------
-echo "[*] Clonage du repo principal..."
-git clone "$REPO_URL" "$WORKDIR"
+# sudo apt install git build-essential device-tree-compiler simg2img cpio
+
+# -------------------------
+# Clonage firmware
+# -------------------------
+echo "[*] Clonage du repo firmware..."
+git clone "$FIRMWARE_REPO" "$WORKDIR"
 cd "$WORKDIR"
 
 # -------------------------
-# Clonage et compilation de magiskboot
+# Clonage et compilation magiskboot
 # -------------------------
 echo "[*] Clonage du repo magiskboot..."
 git clone "$MAGISKBOOT_REPO" "$MAGISKBOOT_DIR"
@@ -35,38 +38,32 @@ make
 cd "$WORKDIR"
 
 # -------------------------
-# Création des répertoires nécessaires
+# Création répertoires
 # -------------------------
 mkdir -p "$DEVICEDIR" "$VENDORDIR" "$TMPDIR"
 
 # -------------------------
-# Extraction des images boot/vendor_boot
+# Extraction boot/vendor_boot
 # -------------------------
 for IMG in $(find . -type f -name "boot.img" -o -name "vendor_boot.img"); do
-    echo "[*] Extraction de $IMG..."
+    echo "[*] Extraction $IMG..."
     IMG_BASENAME=$(basename "$IMG")
     mkdir -p "$TMPDIR/boot"
     cp "$IMG" "$TMPDIR/boot/"
     cd "$TMPDIR/boot"
-    
-    if [ -f "$MAGISKBOOT_DIR/magiskboot" ]; then
-        "$MAGISKBOOT_DIR/magiskboot" unpack "$IMG_BASENAME"
-    else
-        echo "[-] magiskboot non trouvé dans $MAGISKBOOT_DIR"
-        exit 1
-    fi
 
-    # Décompresser le ramdisk
+    "$MAGISKBOOT_DIR/magiskboot" unpack "$IMG_BASENAME"
+
+    # Décompresser ramdisk
     if [ -f "ramdisk.cpio" ]; then
         mkdir -p ramdisk
         cd ramdisk
         cpio -idm < ../ramdisk.cpio
-        # Copier init.rc et fstab
         cp -v init*.rc fstab.* "$DEVICEDIR/" 2>/dev/null || true
         cd ..
     fi
 
-    # Extraire le DTB
+    # DTB -> DTS
     if [ -f "split_img/boot.img-dtb" ]; then
         dtc -I dtb -O dts -o "$DEVICEDIR/kernel_extracted.dts" split_img/boot.img-dtb
     fi
@@ -74,29 +71,25 @@ for IMG in $(find . -type f -name "boot.img" -o -name "vendor_boot.img"); do
 done
 
 # -------------------------
-# Extraction des images system/vendor
+# Extraction system/vendor.img
 # -------------------------
 for SYSIMG in $(find . -type f -name "system.img" -o -name "vendor.img"); do
-    echo "[*] Extraction de $SYSIMG..."
+    echo "[*] Extraction $SYSIMG..."
     mkdir -p "$TMPDIR/sys"
     cp "$SYSIMG" "$TMPDIR/sys/raw.img"
-    
+
     simg2img "$TMPDIR/sys/raw.img" "$TMPDIR/sys/system.raw.img"
     mkdir -p "$TMPDIR/sys/mnt"
     sudo mount -o loop "$TMPDIR/sys/system.raw.img" "$TMPDIR/sys/mnt"
 
-    # Copier les blobs
-    SRCDIR="$TMPDIR/sys/mnt"
-    cp -r "$SRCDIR"/* "$VENDORDIR/"
+    cp -r "$TMPDIR/sys/mnt"/* "$VENDORDIR/"
     sudo umount "$TMPDIR/sys/mnt"
 done
 
 # -------------------------
-# Création des fichiers du device tree
+# Création device tree
 # -------------------------
-echo "[*] Création des fichiers du device tree..."
-
-# BoardConfig.mk
+echo "[*] Création des fichiers device tree..."
 cat > "$DEVICEDIR/BoardConfig.mk" << EOF
 BOARD_KERNEL_CMDLINE := androidboot.hardware=samsung
 BOARD_KERNEL_BASE := 0x10008000
@@ -106,7 +99,6 @@ BOARD_KERNEL_TAGS_SIZE := 0x200
 BOARD_RAMDISK_OFFSET := 0x01000000
 EOF
 
-# AndroidProducts.mk
 cat > "$DEVICEDIR/AndroidProducts.mk" << EOF
 include \$(CLEAR_VARS)
 LOCAL_MODULE := android-info
@@ -115,7 +107,6 @@ LOCAL_MODULE_PATH := \$(TARGET_OUT)/system/etc
 include \$(BUILD_PREBUILT)
 EOF
 
-# device.mk
 cat > "$DEVICEDIR/device.mk" << EOF
 include \$(CLEAR_VARS)
 LOCAL_MODULE := libstagefright
@@ -124,7 +115,6 @@ LOCAL_MODULE_TAGS := optional
 include \$(BUILD_MULTI_PREBUILT)
 EOF
 
-# fstab
 cat > "$DEVICEDIR/fstab.a56x" << EOF
 /dev/block/bootdevice/by-name/system      /system      ext4    ro      wait
 /dev/block/bootdevice/by-name/vendor      /vendor      ext4    ro      wait
@@ -132,21 +122,35 @@ cat > "$DEVICEDIR/fstab.a56x" << EOF
 EOF
 
 # -------------------------
-# Génération de proprietary-files.txt
+# proprietary-files.txt
 # -------------------------
-echo "[*] Génération de proprietary-files.txt..."
 cd "$VENDORDIR"
 find . -type f | sed "s|^\./||" > proprietary-files.txt
 
 # -------------------------
-# Rapport
+# Création repo Git prêt à push
 # -------------------------
-echo "[*] Device tree Galaxy A56x prêt !"
-echo "Chemin du device tree : $DEVICEDIR"
-echo "Blobs propriétaires : $VENDORDIR/proprietary-files.txt"
-echo "[*] Fichiers init et fstab copiés depuis le ramdisk."
+echo "[*] Création repo Git à $GIT_REPO_DIR..."
+mkdir -p "$GIT_REPO_DIR"
+cd "$GIT_REPO_DIR"
+git init
+git checkout -b $BRANCH
 
-echo "[*] Nettoyage temporaire..."
+# Copier device tree et blobs
+mkdir -p device/samsung/a56x vendor/samsung/a56x
+cp -r $DEVICEDIR/* device/samsung/a56x/
+cp -r $VENDORDIR/* vendor/samsung/a56x/
+
+# Commit initial
+git add .
+git commit -m "Device tree Galaxy A56x complet + blobs propriétaires"
+
+echo "[*] Repo Git créé avec branche $BRANCH"
+echo "[*] Vous pouvez maintenant ajouter l’origin et push :"
+echo "   git remote add origin <VOTRE_REPO_URL>"
+echo "   git push -u origin $BRANCH"
+
+# Nettoyage
 rm -rf "$TMPDIR"
 
-echo "[*] Terminé. Vous pouvez maintenant compiler TWRP ou LineageOS."
+echo "[*] Terminé. Device tree et repo Git prêts à push."
