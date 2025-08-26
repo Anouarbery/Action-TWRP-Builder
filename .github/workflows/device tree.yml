@@ -1,79 +1,152 @@
-name: Generate LineageOS Device Tree – Galaxy A56
+#!/bin/bash
+# Workflow avancé pour générer un device tree Galaxy A56x avec magiskboot intégré
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
+set -e
 
-jobs:
-  generate-device-tree:
-    runs-on: ubuntu-latest
+# -------------------------
+# Variables
+# -------------------------
+REPO_URL="https://gitgud.io/Van-Firmware-Dumps/samsung/a56x.git"
+MAGISKBOOT_REPO="https://github.com/Luciiuss/sm-a566b/tree/main/magiskboot"
+WORKDIR="$HOME/a56x_firmware"
+DEVICEDIR="$WORKDIR/device/samsung/a56x"
+VENDORDIR="$WORKDIR/vendor/samsung/a56x"
+TMPDIR="$WORKDIR/tmp_extraction"
+MAGISKBOOT_DIR="$WORKDIR/magiskboot"
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+# Dépendances (installer si nécessaire)
+# sudo apt install android-tools-adb android-tools-fastboot device-tree-compiler simg2img cpio
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y git unzip lz4 simg2img
+# -------------------------
+# Clonage du repo principal
+# -------------------------
+echo "[*] Clonage du repo principal..."
+git clone "$REPO_URL" "$WORKDIR"
+cd "$WORKDIR"
 
-      - name: Clone firmware dump
-        run: |
-          git clone https://gitgud.io/Van-Firmware-Dumps/samsung/a56x.git firmware
-          cd firmware
-          git checkout 7ae13010055f8646e07c70b26fd0c536dc102de3
+# -------------------------
+# Clonage et compilation de magiskboot
+# -------------------------
+echo "[*] Clonage du repo magiskboot..."
+git clone "$MAGISKBOOT_REPO" "$MAGISKBOOT_DIR"
+cd "$MAGISKBOOT_DIR"
+echo "[*] Compilation de magiskboot..."
+make
+cd "$WORKDIR"
 
-      - name: List firmware contents
-        run: |
-          echo "Firmware dump contents:"
-          find firmware -maxdepth 2 | sed 's/^/  /'
+# -------------------------
+# Création des répertoires nécessaires
+# -------------------------
+mkdir -p "$DEVICEDIR" "$VENDORDIR" "$TMPDIR"
 
-      - name: Create device tree scaffold
-        run: |
-          mkdir -p device/samsung/a56x
+# -------------------------
+# Extraction des images boot/vendor_boot
+# -------------------------
+for IMG in $(find . -type f -name "boot.img" -o -name "vendor_boot.img"); do
+    echo "[*] Extraction de $IMG..."
+    IMG_BASENAME=$(basename "$IMG")
+    mkdir -p "$TMPDIR/boot"
+    cp "$IMG" "$TMPDIR/boot/"
+    cd "$TMPDIR/boot"
+    
+    if [ -f "$MAGISKBOOT_DIR/magiskboot" ]; then
+        "$MAGISKBOOT_DIR/magiskboot" unpack "$IMG_BASENAME"
+    else
+        echo "[-] magiskboot non trouvé dans $MAGISKBOOT_DIR"
+        exit 1
+    fi
 
-          # AndroidProducts.mk (single line)
-          echo 'PRODUCT_MAKEFILES := $(LOCAL_DIR)/device.mk' > device/samsung/a56x/AndroidProducts.mk
+    # Décompresser le ramdisk
+    if [ -f "ramdisk.cpio" ]; then
+        mkdir -p ramdisk
+        cd ramdisk
+        cpio -idm < ../ramdisk.cpio
+        # Copier init.rc et fstab
+        cp -v init*.rc fstab.* "$DEVICEDIR/" 2>/dev/null || true
+        cd ..
+    fi
 
-          # device.mk
-          cat > device/samsung/a56x/device.mk <<'EOF'
-PRODUCT_BRAND := samsung
-PRODUCT_MODEL := SM-A566B
-PRODUCT_DEVICE := a56x
-PRODUCT_MANUFACTURER := samsung
+    # Extraire le DTB
+    if [ -f "split_img/boot.img-dtb" ]; then
+        dtc -I dtb -O dts -o "$DEVICEDIR/kernel_extracted.dts" split_img/boot.img-dtb
+    fi
+    cd "$WORKDIR"
+done
 
-$(call inherit-product, vendor/lineage/config/common.mk)
+# -------------------------
+# Extraction des images system/vendor
+# -------------------------
+for SYSIMG in $(find . -type f -name "system.img" -o -name "vendor.img"); do
+    echo "[*] Extraction de $SYSIMG..."
+    mkdir -p "$TMPDIR/sys"
+    cp "$SYSIMG" "$TMPDIR/sys/raw.img"
+    
+    simg2img "$TMPDIR/sys/raw.img" "$TMPDIR/sys/system.raw.img"
+    mkdir -p "$TMPDIR/sys/mnt"
+    sudo mount -o loop "$TMPDIR/sys/system.raw.img" "$TMPDIR/sys/mnt"
 
-PRODUCT_PACKAGES += \
-    org.lineageos.settings
+    # Copier les blobs
+    SRCDIR="$TMPDIR/sys/mnt"
+    cp -r "$SRCDIR"/* "$VENDORDIR/"
+    sudo umount "$TMPDIR/sys/mnt"
+done
+
+# -------------------------
+# Création des fichiers du device tree
+# -------------------------
+echo "[*] Création des fichiers du device tree..."
+
+# BoardConfig.mk
+cat > "$DEVICEDIR/BoardConfig.mk" << EOF
+BOARD_KERNEL_CMDLINE := androidboot.hardware=samsung
+BOARD_KERNEL_BASE := 0x10008000
+BOARD_KERNEL_PAGESIZE := 2048
+BOARD_KERNEL_TAGS_ADDR := 0x10000100
+BOARD_KERNEL_TAGS_SIZE := 0x200
+BOARD_RAMDISK_OFFSET := 0x01000000
 EOF
 
-          # BoardConfig.mk
-          cat > device/samsung/a56x/BoardConfig.mk <<'EOF'
-TARGET_ARCH := arm64
-TARGET_BOARD_PLATFORM := qcom
-BOARD_KERNEL_IMAGE := kernel
-BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
+# AndroidProducts.mk
+cat > "$DEVICEDIR/AndroidProducts.mk" << EOF
+include \$(CLEAR_VARS)
+LOCAL_MODULE := android-info
+LOCAL_SRC_FILES := android-info.txt
+LOCAL_MODULE_PATH := \$(TARGET_OUT)/system/etc
+include \$(BUILD_PREBUILT)
 EOF
 
-          # vendorsetup.sh
-          echo 'add_lunch_combo lineage_a56x-userdebug' > device/samsung/a56x/vendorsetup.sh
-          chmod +x device/samsung/a56x/vendorsetup.sh
+# device.mk
+cat > "$DEVICEDIR/device.mk" << EOF
+include \$(CLEAR_VARS)
+LOCAL_MODULE := libstagefright
+LOCAL_SRC_FILES := \$(call all-subdir-java-files)
+LOCAL_MODULE_TAGS := optional
+include \$(BUILD_MULTI_PREBUILT)
+EOF
 
-      - name: Generate proprietary-files.txt template
-        run: |
-          mkdir -p device/samsung/a56x
-          echo "# Proprietary blobs from firmware dump" > device/samsung/a56x/proprietary-files.txt
-          grep -R ".so" firmware/vendor >> device/samsung/a56x/proprietary-files.txt || true
-          grep -R "libwifihal" firmware >> device/samsung/a56x/proprietary-files.txt || true
+# fstab
+cat > "$DEVICEDIR/fstab.a56x" << EOF
+/dev/block/bootdevice/by-name/system      /system      ext4    ro      wait
+/dev/block/bootdevice/by-name/vendor      /vendor      ext4    ro      wait
+/dev/block/bootdevice/by-name/cache       /cache       ext4    rw      wait
+EOF
 
-      - name: Package device tree
-        run: |
-          mkdir -p output
-          cd device/samsung
-          zip -r ../../output/a56x_device_tree.zip a56x
+# -------------------------
+# Génération de proprietary-files.txt
+# -------------------------
+echo "[*] Génération de proprietary-files.txt..."
+cd "$VENDORDIR"
+find . -type f | sed "s|^\./||" > proprietary-files.txt
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: a56x_device_tree
-          path: output/a56x_device_tree.zip
+# -------------------------
+# Rapport
+# -------------------------
+echo "[*] Device tree Galaxy A56x prêt !"
+echo "Chemin du device tree : $DEVICEDIR"
+echo "Blobs propriétaires : $VENDORDIR/proprietary-files.txt"
+echo "[*] Fichiers init et fstab copiés depuis le ramdisk."
+
+echo "[*] Nettoyage temporaire..."
+rm -rf "$TMPDIR"
+
+echo "[*] Terminé. Vous pouvez maintenant compiler TWRP ou LineageOS."
