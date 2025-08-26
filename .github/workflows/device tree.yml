@@ -10,33 +10,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout this repo
-      uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    - name: Set up dependencies
-      run: sudo apt-get update && sudo apt-get install -y git unzip lz4 simg2img
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y git unzip lz4 simg2img
 
-    - name: Clone firmware dump
-      run: |
-        git clone https://gitgud.io/Van-Firmware-Dumps/samsung/a56x.git firmware
-        cd firmware
-        git checkout 7ae13010055f8646e07c70b26fd0c536dc102de3
+      - name: Clone firmware dump
+        run: |
+          git clone https://gitgud.io/Van-Firmware-Dumps/samsung/a56x.git firmware
+          cd firmware
+          git checkout 7ae13010055f8646e07c70b26fd0c536dc102de3
 
-    - name: List firmware files
-      run: |
-        echo "Firmware dump contents:"
-        find firmware -maxdepth 2 | sed 's/^/  /'
+      - name: List firmware contents
+        run: |
+          echo "Firmware dump contents:"
+          find firmware -maxdepth 2 | sed 's/^/  /'
 
-    - name: Create LineageOS device tree scaffold
-      run: |
-        mkdir -p device/samsung/a56x
-        cd device/samsung/a56x
-        # Makefiles
-        cat > AndroidProducts.mk << 'EOF'
-PRODUCT_MAKEFILES := \
-    $(LOCAL_DIR)/device.mk
-EOF
-        cat > device.mk << 'EOF'
+      - name: Create device tree scaffold
+        run: |
+          mkdir -p device/samsung/a56x
+
+          # AndroidProducts.mk (single line)
+          echo 'PRODUCT_MAKEFILES := $(LOCAL_DIR)/device.mk' > device/samsung/a56x/AndroidProducts.mk
+
+          # device.mk
+          cat > device/samsung/a56x/device.mk <<'EOF'
 PRODUCT_NAME := a56x
 PRODUCT_BRAND := samsung
 PRODUCT_MODEL := SM-A566B
@@ -48,32 +47,34 @@ $(call inherit-product, vendor/lineage/config/common.mk)
 PRODUCT_PACKAGES += \
     org.lineageos.settings
 EOF
-        # BoardConfig
-        cat > BoardConfig.mk << 'EOF'
+
+          # BoardConfig.mk
+          cat > device/samsung/a56x/BoardConfig.mk <<'EOF'
 TARGET_ARCH := arm64
 TARGET_BOARD_PLATFORM := qcom
 BOARD_KERNEL_IMAGE := kernel
 BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
 EOF
-        # Vendor setup
-        cat > vendorsetup.sh << 'EOF'
-add_lunch_combo lineage_a56x-userdebug
-EOF
-        chmod +x vendorsetup.sh
 
-    - name: Extract proprietary-files list
-      run: |
-        cd device/samsung/a56x
-        echo "# Proprietary blobs from firmware dump" > proprietary-files.txt
-        # Example: search for some common blobs
-        grep -R "libwifihal" -l ../../firmware >> proprietary-files.txt || true
-        grep -R ".so" -l ../../firmware/vendor >> proprietary-files.txt || true
+          # vendorsetup.sh
+          echo 'add_lunch_combo lineage_a56x-userdebug' > device/samsung/a56x/vendorsetup.sh
+          chmod +x device/samsung/a56x/vendorsetup.sh
 
-    - name: Package and upload device tree
-      run: |
-        mkdir -p output
-        zip -r output/a56x_device_tree.zip device/samsung/a56x
-      uses: actions/upload-artifact@v4
-      with:
-        name: a56x_device_tree
-        path: output/a56x_device_tree.zip
+      - name: Generate proprietary-files.txt template
+        run: |
+          mkdir -p device/samsung/a56x
+          echo "# Proprietary blobs from firmware dump" > device/samsung/a56x/proprietary-files.txt
+          grep -R ".so" firmware/vendor >> device/samsung/a56x/proprietary-files.txt || true
+          grep -R "libwifihal" firmware >> device/samsung/a56x/proprietary-files.txt || true
+
+      - name: Package device tree
+        run: |
+          mkdir -p output
+          cd device/samsung
+          zip -r ../../output/a56x_device_tree.zip a56x
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: a56x_device_tree
+          path: output/a56x_device_tree.zip
