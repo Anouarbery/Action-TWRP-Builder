@@ -36,7 +36,6 @@ jobs:
 
           # device.mk
           cat > device/samsung/a56x/device.mk <<'EOF'
-PRODUCT_NAME := a56x
 PRODUCT_BRAND := samsung
 PRODUCT_MODEL := SM-A566B
 PRODUCT_DEVICE := a56x
